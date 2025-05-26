@@ -293,6 +293,74 @@ class MACDIndicator(BaseIndicator):
         return ['MACD_line', 'MACD_signal', 'MACD_hist']
 
 
+class ATRIndicator(BaseIndicator):
+    """Average True Range indicator."""
+    
+    def __init__(
+        self, 
+        period: int = 14,
+        color: str = '#e67e22',  # Orange
+        alpha: float = 0.8,
+        linewidth: float = 1.0
+    ):
+        """
+        Initialize ATR indicator.
+        
+        Args:
+            period: Period for ATR calculation
+            color: Line color in hex format
+            alpha: Line transparency (0-1)
+            linewidth: Width of the line
+        """
+        super().__init__(color, alpha, linewidth)
+        self.period = period
+    
+    @property
+    def needs_separate_panel(self) -> bool:
+        return True
+    
+    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate ATR values."""
+        result_df = df.copy()
+        
+        high_low = result_df['High'] - result_df['Low']
+        high_close = abs(result_df['High'] - result_df['Close'].shift())
+        low_close = abs(result_df['Low'] - result_df['Close'].shift())
+        
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        result_df[f'ATR_{self.period}'] = true_range.rolling(window=self.period).mean()
+        
+        return result_df
+    
+    def plot(self, ax: plt.Axes, df: pd.DataFrame) -> None:
+        """Plot ATR in a subplot panel."""
+        col_name = f'ATR_{self.period}'
+        if col_name not in df.columns:
+            return
+            
+        # Plot ATR line
+        ax.plot(
+            range(len(df)),
+            df[col_name],
+            label=f'ATR ({self.period})',
+            color=self.color,
+            alpha=self.alpha,
+            linewidth=self.linewidth
+        )
+        
+        # Set panel properties
+        ax.set_ylabel('ATR', fontsize=ChartPlotter.PRICE_FONTSIZE)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper left', fontsize=ChartPlotter.TICK_FONTSIZE)
+        ax.tick_params(axis='both', labelsize=ChartPlotter.TICK_FONTSIZE)
+    
+    @property
+    def column_names(self) -> List[str]:
+        """Get list of column names added by this indicator."""
+        return [f'ATR_{self.period}']
+
+
 class DateManager:
     BUFFER_DAYS: int = 10
 
@@ -457,7 +525,7 @@ class DateManager:
 
 
 class ChartPlotter:
-    FIGURE_SIZE = (12, 8)
+    FIGURE_SIZE = (18, 12)
     DPI = 300
 
     TITLE_FONTSIZE = 15
@@ -733,7 +801,7 @@ class OHLCVManager:
 
         all_ohlcv = []
         current_timestamp = start_timestamp
-
+        df = None
         while current_timestamp < end_timestamp:
             try:
                 ohlcv = exchange.fetch_ohlcv(
@@ -758,7 +826,10 @@ class OHLCVManager:
             df.set_index("timestamp", inplace=True)
 
             self._data = df
-        return df
+        if df is not None:
+            return df
+        else:
+            raise ValueError("No data available. Call fetch_data first.")
 
     def get_window_data(self, window: Dict) -> Dict:
         """
@@ -809,6 +880,53 @@ class OHLCVManager:
 
         performance = (window_end_close / visible_end_close) - 1
         return round(performance, 4)
+
+    def calculate_trend(self, window: Dict) -> Dict[str, float | str]:
+        """
+        Calculate trend information based on ATR at the last visible candle.
+        
+        Args:
+            window: Dictionary with window information
+            
+        Returns:
+            Dictionary containing:
+                - atr_factor: How many ATR units away the last hidden candle is
+                - trend: 'bullish', 'bearish', or 'neutral'
+                - atr: The ATR value at the last visible candle
+        """
+        if self._data is None:
+            raise ValueError("No data available. Call fetch_data first.")
+            
+        visible_end = pd.to_datetime(window["visible_end_date"])
+        window_end = pd.to_datetime(window["end_date"])
+        
+        period = 14
+        high_low = self._data['high'] - self._data['low']
+        high_close = abs(self._data['high'] - self._data['close'].shift())
+        low_close = abs(self._data['low'] - self._data['close'].shift())
+        
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        atr = true_range.rolling(window=period).mean()
+        
+        visible_atr = atr.loc[visible_end]
+        
+        visible_close = self._data.loc[visible_end, "close"]
+        hidden_close = self._data.loc[window_end, "close"]
+        price_change = hidden_close - visible_close
+        atr_factor = price_change / visible_atr
+        
+        trend = 'neutral'
+        if atr_factor > 1:
+            trend = 'bullish'
+        elif atr_factor < -1:
+            trend = 'bearish'
+            
+        return {
+            'atr_factor': round(atr_factor, 4),
+            'trend': trend,
+            'atr': round(visible_atr, 4)
+        }
 
     @staticmethod
     def _format_candles(df: pd.DataFrame) -> list[dict]:
@@ -932,6 +1050,7 @@ def create_dataset(
     plotter = ChartPlotter(ohlcv_df, str(plots_dir), technical_indicators)
     
     metadata = {}
+    metadata2 = {}  # Second metadata without OHLCV data
     total_plots = len(date_manager.windows)
     
     title = f"{symbol} {timeframe}"
@@ -939,21 +1058,42 @@ def create_dataset(
     for i, window in enumerate(date_manager.windows, 1):
         hidden_file, result_file = plotter.create_plot_pair(window, title)
         perf = ohlcv_manager.calculate_performance(window)
+        trend_info = ohlcv_manager.calculate_trend(window)
         ohlcv_data = ohlcv_manager.get_window_data(window)
         
         print(f"Creating plot {i}/{total_plots}")
         
+        # Full metadata with OHLCV data
         metadata[hidden_file] = {
             "result_file": result_file,
             "start_date": window["start_date"],
             "visible_end_date": window["visible_end_date"],
             "end_date": window["end_date"],
             "performance": perf,
+            "trend": trend_info["trend"],
+            "atr_factor": trend_info["atr_factor"],
+            "atr": trend_info["atr"],
             **ohlcv_data
         }
+        
+        # Metadata without OHLCV data
+        metadata2[hidden_file] = {
+            "result_file": result_file,
+            "start_date": window["start_date"],
+            "visible_end_date": window["visible_end_date"],
+            "end_date": window["end_date"],
+            "performance": perf,
+            "trend": trend_info["trend"],
+            "atr_factor": trend_info["atr_factor"],
+            "atr": trend_info["atr"]
+        }
     
+    # Save both metadata files
     with open(output_path / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=4)
+    
+    with open(output_path / "metadata2.json", "w") as f:
+        json.dump(metadata2, f, indent=4)
 
 
 if __name__ == "__main__":
@@ -963,7 +1103,7 @@ if __name__ == "__main__":
     END_YEAR_MONTH = "2024-01"
     VISIBLE_WEEKS = 3
     HIDDEN_WEEKS = 1
-    OUTPUT_DIR = "data/btc_4h_dataset"
+    OUTPUT_DIR = "btc_4h_dataset"
 
     indicators: Dict[str, BaseIndicator] = {
         "SMA20": SMAIndicator(
@@ -987,6 +1127,12 @@ if __name__ == "__main__":
             color='#2ecc71', 
             signal_color='#e74c3c',  
             macd_color='#3498db',
+            alpha=0.8,
+            linewidth=1.0
+        ),
+        "ATR14": ATRIndicator(
+            period=14,
+            color='#e67e22', 
             alpha=0.8,
             linewidth=1.0
         )
