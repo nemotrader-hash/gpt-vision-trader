@@ -369,8 +369,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🆘 **Support**
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/gpt-vision-trader/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/gpt-vision-trader/discussions)
+- **Issues**: [GitHub Issues](https://github.com/nemotrader-hash/gpt-vision-trader/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/nemotrader-hash/gpt-vision-trader/discussions)
 - **Documentation**: Check the docs folder for detailed guides
 
 ---
