@@ -8,5 +8,5 @@ This module contains API clients and integrations:
 - Live data providers
 """
 
-from .freqtrade_client import FreqtradeAPIClient, FreqtradeConfig
+from .freqtrade_client import FreqtradeAPIClient, FreqtradeConfig, TradingOperations
 from .trading_controller import TradingController

@@ -18,7 +18,7 @@ from ..core.gpt_analyzer import LiveGPTAnalyzer
 from ..core.chart_generator import ChartGenerator
 from ..core.data_processor import DataProcessor
 from ..utils.logging_utils import TradingLogHandler
-from .enhanced_freqtrade_client import EnhancedFreqtradeClient, EnhancedTradingOperations
+from .freqtrade_client import FreqtradeAPIClient, TradingOperations
 from ..utils.indicators import SMAIndicator
 
 
@@ -34,7 +34,7 @@ class TradingController:
     """
     
     def __init__(self,
-                 api_client: EnhancedFreqtradeClient,
+                 api_client: FreqtradeAPIClient,
                  gpt_analyzer: LiveGPTAnalyzer,
                  pair: str,
                  timeframe: str,
@@ -80,7 +80,7 @@ class TradingController:
             "gpt_vision_trader/data/temp_charts",
             technical_indicators=technical_indicators
         )
-        self.trading_ops = EnhancedTradingOperations(api_client)
+        self.trading_ops = TradingOperations(api_client)
         self.trading_logger = TradingLogHandler()
         
         # State tracking

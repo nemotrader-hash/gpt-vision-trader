@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Freqtrade REST API Client
-=========================
+Freqtrade API Client with GPT Reasoning
+=======================================
 
-Simplified and improved Freqtrade REST API client focused on essential trading operations.
-Removes stake amount calculations - lets Freqtrade handle position sizing automatically.
+Freqtrade REST API client that uses the official ft_rest_client
+and includes GPT reasoning responses in entry tags for better trade tracking.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import requests
+
+from .ft_rest_client import FtRestClient
 
 
-@dataclass
+@dataclass 
 class FreqtradeConfig:
     """Configuration for Freqtrade REST API connection."""
     base_url: str = "http://127.0.0.1:8080"
@@ -26,51 +28,68 @@ class FreqtradeConfig:
 
 class FreqtradeAPIClient:
     """
-    Simplified Freqtrade REST API client focused on essential trading operations.
+    Freqtrade API client that uses the official ft_rest_client
+    and includes GPT reasoning in entry tags.
     
-    Key simplifications:
-    - No stake amount calculations (handled by Freqtrade)
-    - Focus on forceenter/forceexit operations
-    - Streamlined data retrieval methods
+    Key features:
+    - Uses official Freqtrade REST client
+    - Includes GPT reasoning in entry tags
+    - Sanitizes reasoning text for valid tags
+    - Maintains backward compatibility with existing code
     """
     
     def __init__(self, config: FreqtradeConfig):
         """
-        Initialize the Freqtrade API client.
+        Initialize the enhanced Freqtrade API client.
         
         Args:
             config: Freqtrade API configuration
         """
         self.config = config
-        self.base_url = config.base_url.rstrip('/')
-        self.session = requests.Session()
-        self.session.auth = (config.username, config.password)
-        self.session.timeout = config.timeout
-        
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"FreqtradeAPIClient initialized for {self.base_url}")
+        
+        # Initialize the official Freqtrade REST client
+        self.client = FtRestClient(
+            serverurl=config.base_url,
+            username=config.username,
+            password=config.password,
+            timeout=config.timeout
+        )
+        
+        self.logger.info(f"FreqtradeAPIClient initialized for {config.base_url}")
     
-    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+    def _sanitize_entry_tag(self, reasoning: str, max_length: int = 100) -> str:
         """
-        Make an authenticated request to the Freqtrade API.
+        Sanitize GPT reasoning for use as entry tag.
         
         Args:
-            method: HTTP method (GET, POST, etc.)
-            endpoint: API endpoint (without /api/v1 prefix)
-            **kwargs: Additional arguments for requests
+            reasoning: GPT reasoning text
+            max_length: Maximum tag length
             
         Returns:
-            JSON response as dictionary
+            Sanitized entry tag
         """
-        url = f"{self.base_url}/api/v1{endpoint}"
+        if not reasoning:
+            return "gpt_signal"
         
-        try:
-            response = self.session.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            self.logger.error(f"API request failed: {method} {url} - {e}")
-            raise
+        # Remove special characters and keep only alphanumeric, spaces, and basic punctuation
+        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_.,!?]', '', reasoning)
+        
+        # Replace multiple spaces with single space
+        sanitized = re.sub(r'\s+', ' ', sanitized)
+        
+        # Truncate to max length
+        if len(sanitized) > max_length:
+            sanitized = sanitized[:max_length-3] + "..."
+        
+        # Replace spaces with underscores for tag format
+        sanitized = sanitized.replace(' ', '_')
+        
+        # Ensure it starts with a letter (requirement for some systems)
+        if sanitized and not sanitized[0].isalpha():
+            sanitized = f"gpt_{sanitized}"
+        
+        return sanitized or "gpt_signal"
     
     def ping(self) -> bool:
         """
@@ -80,8 +99,8 @@ class FreqtradeAPIClient:
             True if API is accessible
         """
         try:
-            response = self._make_request('GET', '/ping')
-            return response.get('status') == 'pong'
+            response = self.client.ping()
+            return response and response.get('status') == 'pong'
         except Exception as e:
             self.logger.error(f"Ping failed: {e}")
             return False
@@ -94,24 +113,20 @@ class FreqtradeAPIClient:
             Bot status information including open trades
         """
         try:
-            response = self._make_request('GET', '/status')
-            self.logger.debug(f"Status response: {response}")
+            response = self.client.status()
             
-            # Handle different response formats
-            if isinstance(response, dict):
-                return response
-            elif isinstance(response, list):
-                # If status returns a list (likely empty), create a default status
-                self.logger.info("Status returned list instead of dict - creating default status")
+            if isinstance(response, list):
+                # Handle case where status returns list of trades
                 return {
                     'state': 'running',
                     'dry_run': True,
                     'max_open_trades': 3,
                     'stake_currency': 'USDT',
-                    'open_trades': response  # Use the list as open_trades
+                    'open_trades': response
                 }
+            elif isinstance(response, dict):
+                return response
             else:
-                self.logger.warning(f"Unexpected status response type: {type(response)}")
                 return {
                     'state': 'unknown',
                     'dry_run': True,
@@ -144,93 +159,160 @@ class FreqtradeAPIClient:
         Returns:
             DataFrame with OHLCV data
         """
-        params = {
-            'pair': pair,
-            'timeframe': timeframe,
-            'limit': min(limit, 1500)
-        }
-        
         try:
-            response = self._make_request('GET', '/pair_candles', params=params)
+            response = self.client.pair_candles(
+                pair=pair,
+                timeframe=timeframe,
+                limit=min(limit, 1500)
+            )
             
-            if 'data' in response and response['data']:
-                df = pd.DataFrame(response['data'])
+            if not response:
+                self.logger.warning(f"No response for {pair} {timeframe}")
+                return pd.DataFrame()
+            
+            # Handle different response formats
+            candle_data = None
+            if isinstance(response, dict) and 'data' in response:
+                candle_data = response['data']
+            elif isinstance(response, list):
+                candle_data = response
+            
+            if candle_data:
+                # Check if data is list of lists (Freqtrade format) or list of dicts
+                if isinstance(candle_data[0], list):
+                    # List of lists format: [timestamp, open, high, low, close, volume, ...]
+                    df_data = []
+                    for candle in candle_data:
+                        if len(candle) >= 6:  # Ensure we have at least OHLCV data
+                            df_data.append({
+                                'date': candle[0],
+                                'open': candle[1],
+                                'high': candle[2], 
+                                'low': candle[3],
+                                'close': candle[4],
+                                'volume': candle[5]
+                            })
+                    
+                    if df_data:
+                        df = pd.DataFrame(df_data)
+                    else:
+                        self.logger.error("No valid candle data found")
+                        return pd.DataFrame()
+                else:
+                    # Dictionary format
+                    df = pd.DataFrame(candle_data)
+                
+                if df.empty:
+                    self.logger.warning(f"Empty DataFrame for {pair}")
+                    return pd.DataFrame()
                 
                 # Convert timestamp and set as index
-                df['date'] = pd.to_datetime(df['date'])
-                df.set_index('date', inplace=True)
+                if 'date' in df.columns:
+                    df['date'] = pd.to_datetime(df['date'])
+                    df.set_index('date', inplace=True)
                 
                 # Convert to numeric types
                 numeric_columns = ['open', 'high', 'low', 'close', 'volume']
-                df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
+                available_columns = [col for col in numeric_columns if col in df.columns]
                 
-                self.logger.info(f"Retrieved {len(df)} candles for {pair} {timeframe}")
+                if available_columns:
+                    df[available_columns] = df[available_columns].apply(pd.to_numeric, errors='coerce')
+                
+                self.logger.info(f"✅ Retrieved {len(df)} candles for {pair} {timeframe}")
                 return df
             else:
-                self.logger.warning(f"No candle data received for {pair} {timeframe}")
+                self.logger.warning(f"No candle data found for {pair} {timeframe}")
                 return pd.DataFrame()
                 
         except Exception as e:
             self.logger.error(f"Failed to get candles for {pair} {timeframe}: {e}")
             return pd.DataFrame()
     
-    def force_enter(self, 
-                   pair: str, 
-                   side: str = 'long',
-                   entry_tag: str = 'gpt_vision_entry') -> Dict[str, Any]:
+    def force_enter_with_reasoning(self, 
+                                  pair: str, 
+                                  side: str,
+                                  gpt_reasoning: str,
+                                  prediction: str = None,
+                                  price: float = None) -> Dict[str, Any]:
         """
-        Force entry into a position - simplified version without stake amount.
-        Let Freqtrade handle position sizing based on its configuration.
+        Force entry into a position with GPT reasoning as entry tag.
         
         Args:
             pair: Trading pair
             side: 'long' or 'short'
-            entry_tag: Tag for the entry
+            gpt_reasoning: GPT reasoning text to include in entry tag
+            prediction: GPT prediction (bullish/bearish/neutral)
+            price: Optional entry price
             
         Returns:
             Response from force entry command
         """
-        data = {
-            'pair': pair,
-            'side': side,
-            'entry_tag': entry_tag
-        }
-        
         try:
-            response = self._make_request('POST', '/forceenter', json=data)
-            self.logger.info(f"Force entry executed for {pair} {side}: {response.get('status', 'unknown')}")
-            return response
+            # Create comprehensive entry tag with reasoning
+            base_tag = f"gpt_{prediction or side}" if prediction else f"gpt_{side}"
+            reasoning_tag = self._sanitize_entry_tag(gpt_reasoning, max_length=80)
+            
+            # Combine base tag with reasoning (keep within reasonable limits)
+            if reasoning_tag and reasoning_tag != "gpt_signal":
+                entry_tag = f"{base_tag}_{reasoning_tag}"
+            else:
+                entry_tag = base_tag
+            
+            # Ensure tag isn't too long (some systems have limits)
+            if len(entry_tag) > 100:
+                entry_tag = entry_tag[:97] + "..."
+            
+            self.logger.info(f"Entering {side} position for {pair}")
+            self.logger.info(f"GPT Reasoning: {gpt_reasoning[:200]}...")
+            self.logger.info(f"Entry tag: {entry_tag}")
+            
+            # Use the official Freqtrade client
+            response = self.client.forceenter(
+                pair=pair,
+                side=side,
+                enter_tag=entry_tag,
+                price=price
+            )
+            
+            if response:
+                self.logger.info(f"✅ Force entry executed for {pair} {side}")
+                self.logger.info(f"Response: {response}")
+            else:
+                self.logger.warning(f"⚠️ Force entry may have failed for {pair}")
+            
+            return response or {}
+            
         except Exception as e:
             self.logger.error(f"Failed to force entry for {pair} {side}: {e}")
             raise
     
     def force_exit(self, 
-                  pair: str,
-                  trade_id: Optional[int] = None) -> Dict[str, Any]:
+                  trade_id: int,
+                  order_type: str = None,
+                  amount: float = None) -> Dict[str, Any]:
         """
-        Force exit from a position - simplified to exit full position.
-        No amount specification - always exits the complete position.
+        Force exit from a position.
         
         Args:
-            pair: Trading pair to exit
-            trade_id: Specific trade ID to exit (optional)
+            trade_id: Trade ID to exit
+            order_type: Order type (market/limit)
+            amount: Amount to exit (None for full exit)
             
         Returns:
             Response from force exit command
         """
-        data = {}
-        
-        if trade_id is not None:
-            data['tradeid'] = trade_id
-        else:
-            data['pair'] = pair
-        
         try:
-            response = self._make_request('POST', '/forceexit', json=data)
-            self.logger.info(f"Force exit executed for {pair}: {response.get('status', 'unknown')}")
-            return response
+            response = self.client.forceexit(
+                tradeid=trade_id,
+                ordertype=order_type,
+                amount=amount
+            )
+            
+            self.logger.info(f"✅ Force exit executed for trade {trade_id}")
+            return response or {}
+            
         except Exception as e:
-            self.logger.error(f"Failed to force exit for {pair}: {e}")
+            self.logger.error(f"Failed to force exit trade {trade_id}: {e}")
             raise
     
     def get_open_trades(self) -> List[Dict[str, Any]]:
@@ -241,7 +323,7 @@ class FreqtradeAPIClient:
             List of open trade dictionaries
         """
         try:
-            status = self.get_status()  # Use our improved get_status method
+            status = self.get_status()
             return status.get('open_trades', [])
         except Exception as e:
             self.logger.error(f"Failed to get open trades: {e}")
@@ -255,55 +337,10 @@ class FreqtradeAPIClient:
             Profit information dictionary
         """
         try:
-            return self._make_request('GET', '/profit')
+            return self.client.profit() or {}
         except Exception as e:
             self.logger.error(f"Failed to get profit info: {e}")
             return {}
-    
-    def get_performance(self) -> List[Dict[str, Any]]:
-        """
-        Get performance statistics per pair.
-        
-        Returns:
-            List of performance dictionaries per pair
-        """
-        try:
-            return self._make_request('GET', '/performance')
-        except Exception as e:
-            self.logger.error(f"Failed to get performance: {e}")
-            return []
-    
-    def get_current_price(self, pair: str) -> Optional[float]:
-        """
-        Get current price for a trading pair using the most recent candle.
-        
-        Args:
-            pair: Trading pair
-            
-        Returns:
-            Current price or None if unavailable
-        """
-        try:
-            df = self.get_pair_candles(pair, '1m', limit=1)
-            if not df.empty:
-                return float(df['close'].iloc[-1])
-        except Exception as e:
-            self.logger.error(f"Failed to get current price for {pair}: {e}")
-        
-        return None
-    
-    def is_dry_run(self) -> bool:
-        """
-        Check if bot is running in dry run mode.
-        
-        Returns:
-            True if in dry run mode
-        """
-        try:
-            status = self.get_status()
-            return status.get('dry_run', True)
-        except Exception:
-            return True  # Assume dry run if we can't determine
     
     def get_trading_summary(self) -> Dict[str, Any]:
         """
@@ -313,22 +350,9 @@ class FreqtradeAPIClient:
             Dictionary with trading summary information
         """
         try:
-            # Get status (now handles list responses properly)
             status = self.get_status()
-            
-            # Get profit info safely
-            try:
-                profit = self.get_profit_info()
-            except:
-                self.logger.warning("Could not get profit info, using defaults")
-                profit = {}
-            
-            # Get open trades safely
-            try:
-                open_trades = self.get_open_trades()
-            except:
-                self.logger.warning("Could not get open trades, using defaults")
-                open_trades = []
+            profit = self.get_profit_info()
+            open_trades = self.get_open_trades()
             
             summary = {
                 'bot_state': status.get('state', 'unknown'),
@@ -361,12 +385,24 @@ class FreqtradeAPIClient:
                 'open_trades': [],
                 'error': str(e)
             }
+    
+    def is_dry_run(self) -> bool:
+        """
+        Check if bot is running in dry run mode.
+        
+        Returns:
+            True if in dry run mode
+        """
+        try:
+            status = self.get_status()
+            return status.get('dry_run', True)
+        except Exception:
+            return True
 
 
 class TradingOperations:
     """
-    High-level trading operations using the Freqtrade API client.
-    Provides simplified methods for common trading tasks.
+    Trading operations that include GPT reasoning in trades.
     """
     
     def __init__(self, api_client: FreqtradeAPIClient):
@@ -376,17 +412,22 @@ class TradingOperations:
         Args:
             api_client: Freqtrade API client instance
         """
+        if not isinstance(api_client, FreqtradeAPIClient):
+            raise TypeError(f"Expected FreqtradeAPIClient, got {type(api_client)}")
         self.api = api_client
         self.logger = logging.getLogger(__name__)
     
-    def enter_position(self, pair: str, direction: str, reason: str = "gpt_signal") -> bool:
+    def enter_position_with_reasoning(self, 
+                                    pair: str, 
+                                    direction: str, 
+                                    gpt_analysis: Dict[str, Any]) -> bool:
         """
-        Enter a position based on trading signal.
+        Enter a position with GPT reasoning included in entry tag.
         
         Args:
             pair: Trading pair
             direction: 'long' or 'short'
-            reason: Reason for entry (used as entry tag)
+            gpt_analysis: GPT analysis result containing reasoning
             
         Returns:
             True if successful
@@ -400,18 +441,23 @@ class TradingOperations:
                 self.logger.info(f"Position already exists for {pair}, skipping entry")
                 return False
             
-            # Execute force entry
-            response = self.api.force_enter(
+            # Extract reasoning and prediction from GPT analysis
+            reasoning = gpt_analysis.get('analysis', 'GPT analysis')
+            prediction = gpt_analysis.get('prediction', direction)
+            
+            # Execute force entry with reasoning
+            response = self.api.force_enter_with_reasoning(
                 pair=pair,
                 side=direction,
-                entry_tag=f"{reason}_{direction}"
+                gpt_reasoning=reasoning,
+                prediction=prediction
             )
             
-            success = response.get('status') == 'success'
+            success = bool(response)
             if success:
-                self.logger.info(f"Successfully entered {direction} position for {pair}")
+                self.logger.info(f"✅ Successfully entered {direction} position for {pair} with GPT reasoning")
             else:
-                self.logger.warning(f"Force entry failed for {pair}: {response}")
+                self.logger.warning(f"⚠️ Force entry may have failed for {pair}")
             
             return success
             
@@ -419,7 +465,7 @@ class TradingOperations:
             self.logger.error(f"Error entering position for {pair}: {e}")
             return False
     
-    def exit_position(self, pair: str, reason: str = "gpt_signal") -> bool:
+    def exit_position(self, pair: str, reason: str = "gpt_exit") -> bool:
         """
         Exit position for a trading pair.
         
@@ -431,7 +477,7 @@ class TradingOperations:
             True if successful
         """
         try:
-            # Check if position exists
+            # Find open trade for this pair
             open_trades = self.api.get_open_trades()
             existing_trade = next((t for t in open_trades if t.get('pair') == pair), None)
             
@@ -439,17 +485,19 @@ class TradingOperations:
                 self.logger.info(f"No position exists for {pair}, skipping exit")
                 return False
             
-            # Execute force exit
-            response = self.api.force_exit(
-                pair=pair,
-                trade_id=existing_trade.get('trade_id')
-            )
+            trade_id = existing_trade.get('trade_id')
+            if not trade_id:
+                self.logger.error(f"No trade ID found for {pair}")
+                return False
             
-            success = response.get('status') == 'success'
+            # Execute force exit
+            response = self.api.force_exit(trade_id=trade_id)
+            
+            success = bool(response)
             if success:
-                self.logger.info(f"Successfully exited position for {pair}")
+                self.logger.info(f"✅ Successfully exited position for {pair}")
             else:
-                self.logger.warning(f"Force exit failed for {pair}: {response}")
+                self.logger.warning(f"⚠️ Force exit may have failed for {pair}")
             
             return success
             
@@ -457,13 +505,17 @@ class TradingOperations:
             self.logger.error(f"Error exiting position for {pair}: {e}")
             return False
     
-    def execute_trading_signals(self, signals: Dict[str, bool], pair: str) -> Dict[str, bool]:
+    def execute_trading_signals_with_reasoning(self, 
+                                             signals: Dict[str, bool], 
+                                             pair: str,
+                                             gpt_analysis: Dict[str, Any]) -> Dict[str, bool]:
         """
-        Execute trading signals for a pair.
+        Execute trading signals with GPT reasoning included.
         
         Args:
             signals: Trading signals dictionary
             pair: Trading pair
+            gpt_analysis: GPT analysis result
             
         Returns:
             Dictionary with execution results
@@ -481,11 +533,15 @@ class TradingOperations:
                 results['exit_long_success'] = self.exit_position(pair, "gpt_exit")
                 results['exit_short_success'] = results['exit_long_success']  # Same operation
             
-            # Process entry signals
+            # Process entry signals with reasoning
             if signals.get('enter_long'):
-                results['enter_long_success'] = self.enter_position(pair, 'long', "gpt_bullish")
+                results['enter_long_success'] = self.enter_position_with_reasoning(
+                    pair, 'long', gpt_analysis
+                )
             elif signals.get('enter_short'):
-                results['enter_short_success'] = self.enter_position(pair, 'short', "gpt_bearish")
+                results['enter_short_success'] = self.enter_position_with_reasoning(
+                    pair, 'short', gpt_analysis
+                )
             
             return results
             
