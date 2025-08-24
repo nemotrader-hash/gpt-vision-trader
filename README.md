@@ -255,6 +255,8 @@ The system maintains **100% compatibility** with backtesting:
 - **gpt-4o**: ~$1-3/day (96 analyses × $0.01-0.03)
 - **gpt-4o-mini**: ~$0.10-0.30/day (96 analyses × $0.001-0.003)
 
+**Note**: Based on the latest test with the OpenAI GPT-4.o model, small candle movements don’t trigger meaningful reactions (reactions will stay the same). It’s better to run the cycle only after a significant change in the candle chart. For example, if you’re trading on the 15-minute timeframe, run the cycle every 6–12 hours at minimum.
+
 ### **Cost Optimization**
 ```bash
 # Use cheaper model
