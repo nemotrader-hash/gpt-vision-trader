@@ -172,7 +172,7 @@ async def run_multi_pair_trading():
             analysis_interval_minutes=15
         ),
         "ADA/USDT": TradingConfig(
-            symbol="ADA/USDT",
+            symbol="ADA/USDT", 
             timeframe="30m",          # Less frequent for smaller cap
             gpt_model="gpt-4o-mini",
             analysis_interval_minutes=30
