@@ -258,9 +258,9 @@ class FreqtradeAPIClient:
             else:
                 entry_tag = base_tag
             
-            # Ensure tag isn't too long (some systems have limits)
-            if len(entry_tag) > 100:
-                entry_tag = entry_tag[:97] + "..."
+            # Ensure tag isn't too long (some systems have limits: freqtrade limit to 255 char)
+            if len(entry_tag) > 255:
+                entry_tag = entry_tag[:253] + "..."
             
             self.logger.info(f"Entering {side} position for {pair}")
             self.logger.info(f"GPT Reasoning: {gpt_reasoning[:200]}...")
