@@ -368,8 +368,8 @@ class DateManager:
         self,
         start_year_month: str,
         end_year_month: str,
-        visible_weeks: int,
-        hidden_weeks: int,
+        visible_days: int,
+        hidden_days: int,
     ):
         """
         Initialize the DateManager with user parameters.
@@ -377,13 +377,13 @@ class DateManager:
         Args:
             start_year_month: Start date in YYYY-MM format
             end_year_month: End date in YYYY-MM format
-            visible_weeks: Number of visible weeks per window
-            hidden_weeks: Number of hidden weeks per window
+            visible_days: Number of visible days per window
+            hidden_days: Number of hidden days per window
         """
         self._start_year_month = start_year_month
         self._end_year_month = end_year_month
-        self._visible_weeks = visible_weeks
-        self._hidden_weeks = hidden_weeks
+        self._visible_days = visible_days
+        self._hidden_days = hidden_days
 
         self._windows: List[Dict] = []
         self._download_start: Optional[str] = None
@@ -407,29 +407,29 @@ class DateManager:
     def _generate_window_dates(self) -> List[Dict]:
         """
         Generate a list of dictionaries containing start, visible end, and end dates.
-        Windows roll by hidden_weeks, creating overlapping sets that cover all data.
+        Windows roll by hidden_days, creating overlapping sets that cover all data.
         """
         end_date_dt = pd.to_datetime(self._get_month_end_date(self._end_year_month))
-        current_monday = self._get_first_monday_date(self._start_year_month)
+        current_date = pd.to_datetime(f"{self._start_year_month}-01")
 
         windows = []
         window_id = 1
 
-        while current_monday <= end_date_dt:
-            visible_end = self._get_last_visible_sunday(current_monday)
-            window_end = self._get_last_window_sunday(current_monday)
+        while current_date <= end_date_dt:
+            visible_end = current_date + pd.Timedelta(days=self._visible_days - 1)
+            window_end = visible_end + pd.Timedelta(days=self._hidden_days)
 
             if window_end <= end_date_dt:
                 window = {
                     "id": window_id,
-                    "start_date": current_monday.strftime("%Y-%m-%d"),
+                    "start_date": current_date.strftime("%Y-%m-%d"),
                     "visible_end_date": visible_end.strftime("%Y-%m-%d"),
                     "end_date": window_end.strftime("%Y-%m-%d"),
                 }
                 windows.append(window)
                 window_id += 1
 
-                current_monday = current_monday + pd.Timedelta(weeks=self._hidden_weeks)
+                current_date = current_date + pd.Timedelta(days=self._hidden_days)
             else:
                 break
 
@@ -458,45 +458,6 @@ class DateManager:
         next_month = month_start.replace(day=28) + pd.Timedelta(days=4)
         month_end = next_month - pd.Timedelta(days=next_month.day)
         return month_end.strftime("%Y-%m-%d")
-
-    def _get_first_monday_date(self, year_month: str) -> pd.Timestamp:
-        """
-        Get the first Monday on or after the first day of the month.
-
-        Args:
-            year_month: Date in YYYY-MM format
-
-        Returns:
-            Timestamp of the first Monday
-        """
-        first_of_month = pd.to_datetime(f"{year_month}-01")
-        days_until_monday = (7 - first_of_month.weekday()) % 7
-        return first_of_month + pd.Timedelta(days=days_until_monday)
-
-    def _get_last_visible_sunday(self, start_monday: pd.Timestamp) -> pd.Timestamp:
-        """
-        Get the Sunday that ends the visible portion of the window.
-
-        Args:
-            start_monday: Starting Monday of the window
-
-        Returns:
-            Timestamp of the last visible Sunday
-        """
-        return start_monday + pd.Timedelta(weeks=self._visible_weeks - 1, days=6)
-
-    def _get_last_window_sunday(self, start_monday: pd.Timestamp) -> pd.Timestamp:
-        """
-        Get the final Sunday of the window (end of hidden portion).
-
-        Args:
-            start_monday: Starting Monday of the window
-
-        Returns:
-            Timestamp of the last Sunday in the window
-        """
-        total_weeks = self._visible_weeks + self._hidden_weeks
-        return start_monday + pd.Timedelta(weeks=total_weeks - 1, days=6)
 
     def print_summary(self) -> None:
         """Print a summary of all generated dates."""
@@ -724,7 +685,14 @@ class ChartPlotter:
         xmin, xmax = ax.get_xlim()
         ymin, ymax = ax.get_ylim()
 
-        visible_df = df[df.index <= hide_after]
+        # Find the closest timestamp that's less than or equal to hide_after
+        # This handles cases where hide_after doesn't exactly match a candle timestamp
+        visible_mask = df.index <= hide_after
+        if not visible_mask.any():
+            # If no visible data, don't add overlay
+            return
+            
+        visible_df = df[visible_mask]
         hide_ratio = len(visible_df) / len(df)
 
         start_x = xmin + (xmax - xmin) * hide_ratio
@@ -1021,8 +989,8 @@ def create_dataset(
     timeframe: str,
     start_year_month: str,
     end_year_month: str,
-    visible_weeks: int = 3,
-    hidden_weeks: int = 1,
+    visible_days: int = 3,
+    hidden_days: int = 1,
     output_dir: str = "dataset",
     technical_indicators: Optional[Dict[str, BaseIndicator]] = None,
 ) -> None:
@@ -1033,8 +1001,8 @@ def create_dataset(
         timeframe: Candle timeframe (e.g., "4h")
         start_year_month: Start date in YYYY-MM format
         end_year_month: End date in YYYY-MM format
-        visible_weeks: Number of visible weeks per chart
-        hidden_weeks: Number of hidden weeks per chart
+        visible_days: Number of visible days per chart
+        hidden_days: Number of hidden days per chart
         output_dir: Directory to save the dataset
         technical_indicators: Optional dictionary of technical indicators to add to charts
     """
@@ -1043,7 +1011,7 @@ def create_dataset(
     plots_dir = output_path / "plots"
     plots_dir.mkdir(exist_ok=True)
     
-    date_manager = DateManager(start_year_month, end_year_month, visible_weeks, hidden_weeks)
+    date_manager = DateManager(start_year_month, end_year_month, visible_days, hidden_days)
     ohlcv_manager = OHLCVManager(symbol, timeframe)
     
     ohlcv_df = ohlcv_manager.fetch_data(*date_manager.download_range)
@@ -1101,8 +1069,8 @@ if __name__ == "__main__":
     TIMEFRAME = "4h"
     START_YEAR_MONTH = "2023-01"
     END_YEAR_MONTH = "2024-01"
-    VISIBLE_WEEKS = 3
-    HIDDEN_WEEKS = 1
+    VISIBLE_DAYS = 3
+    HIDDEN_DAYS = 1
     OUTPUT_DIR = "btc_4h_dataset"
 
     indicators: Dict[str, BaseIndicator] = {
@@ -1143,8 +1111,8 @@ if __name__ == "__main__":
         timeframe=TIMEFRAME,
         start_year_month=START_YEAR_MONTH,
         end_year_month=END_YEAR_MONTH,
-        visible_weeks=VISIBLE_WEEKS,
-        hidden_weeks=HIDDEN_WEEKS,
+        visible_days=VISIBLE_DAYS,
+        hidden_days=HIDDEN_DAYS,
         output_dir=OUTPUT_DIR,
         technical_indicators=indicators
     )

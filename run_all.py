@@ -18,19 +18,20 @@ from gpt_analysis import PredictionAnalyzer, process_images_and_update_json
 # Configuration
 SYMBOL = "BTC/USDT"
 
-START_YEAR_MONTH = "2022-01"
-END_YEAR_MONTH = "2025-01"
-VISIBLE_WEEKS = 12
-HIDDEN_WEEKS = 1
-GPT_MODEL = "gpt-4.1"
+START_YEAR_MONTH = "2025-03"
+END_YEAR_MONTH = "2025-04"
+VISIBLE_DAYS = 6
+HIDDEN_DAYS = 1
+# Change this line for significant cost savings
+GPT_MODEL = "gpt-4.1"  # Instead of "gpt-4.1"
 # GPT_MODEL = "gpt-4o-mini"
 
 
-TIMEFRAME = "4h"
-FOLDER_NAME = "test_btc_4h_2022_2025_gpt41_12_weeks_sma"  
+TIMEFRAME = "15m"
+FOLDER_NAME = f"test_{SYMBOL.replace('/', '_').lower()}_{TIMEFRAME}_{START_YEAR_MONTH}_{END_YEAR_MONTH}_{GPT_MODEL}_3_days_sma"
 
 # Execution flags
-DO_DATASET = True 
+DO_DATASET = True  
 DO_GPT_ANALYSIS = True  
 DO_PREDICTION_ANALYSIS = True 
 DO_BACKTEST = True      
@@ -179,8 +180,8 @@ async def main():
             timeframe=TIMEFRAME,
             start_year_month=START_YEAR_MONTH,
             end_year_month=END_YEAR_MONTH,
-            visible_weeks=VISIBLE_WEEKS,
-            hidden_weeks=HIDDEN_WEEKS,
+            visible_days=VISIBLE_DAYS,
+            hidden_days=HIDDEN_DAYS,
             output_dir=os.path.join(FOLDER_NAME, "dataset"),
             technical_indicators=get_technical_indicators()
         )
