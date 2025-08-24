@@ -423,3 +423,170 @@ Users report successful live trading with:
 ---
 
 *This documentation is continuously updated. For the latest information, check the [GitHub repository](https://github.com/yourusername/gpt-vision-trader).*
+
+## 🔧 **Quick Fix - Replace the get_pair_candles method**
+
+Replace the `get_pair_candles` method in your `gpt_vision_trader/api/freqtrade_client.py` file (lines 98-142) with this improved version:
+
+```python
+def get_pair_candles(self, 
+                    pair: str, 
+                    timeframe: str, 
+                    limit: int = 500) -> pd.DataFrame:
+    """
+    Get OHLCV candle data for a trading pair.
+    Handles both dictionary and list-based response formats.
+    
+    Args:
+        pair: Trading pair (e.g., 'BTC/USDT')
+        timeframe: Timeframe (e.g., '15m', '1h', '4h')
+        limit: Number of candles to retrieve (max 1500)
+        
+    Returns:
+        DataFrame with OHLCV data
+    """
+    params = {
+        'pair': pair,
+        'timeframe': timeframe,
+        'limit': min(limit, 1500)
+    }
+    
+    try:
+        response = self._make_request('GET', '/pair_candles', params=params)
+        self.logger.info(f"API response keys: {list(response.keys())}")
+        
+        # Handle different response formats
+        candle_data = None
+        if 'data' in response and response['data']:
+            candle_data = response['data']
+        elif isinstance(response, list) and response:
+            candle_data = response
+        
+        if candle_data:
+            self.logger.info(f"Found {len(candle_data)} candles")
+            self.logger.info(f"First candle sample: {candle_data[0] if candle_data else 'None'}")
+            
+            # Check if data is list of lists (Freqtrade format) or list of dicts
+            if isinstance(candle_data[0], list):
+                # List of lists format: [timestamp, open, high, low, close, volume, ...]
+                df_data = []
+                for candle in candle_data:
+                    if len(candle) >= 6:  # Ensure we have at least OHLCV data
+                        df_data.append({
+                            'date': candle[0],
+                            'open': candle[1],
+                            'high': candle[2], 
+                            'low': candle[3],
+                            'close': candle[4],
+                            'volume': candle[5]
+                        })
+                
+                if df_data:
+                    df = pd.DataFrame(df_data)
+                else:
+                    self.logger.error("No valid candle data found in list format")
+                    return pd.DataFrame()
+            else:
+                # Dictionary format
+                df = pd.DataFrame(candle_data)
+            
+            if df.empty:
+                self.logger.warning(f"Empty DataFrame created for {pair}")
+                return pd.DataFrame()
+            
+            # Convert timestamp and set as index
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+            else:
+                self.logger.error(f"No 'date' column found. Available columns: {list(df.columns)}")
+                return pd.DataFrame()
+            
+            # Convert to numeric types
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            available_columns = [col for col in numeric_columns if col in df.columns]
+            
+            if available_columns:
+                df[available_columns] = df[available_columns].apply(pd.to_numeric, errors='coerce')
+            
+            self.logger.info(f"✅ Successfully retrieved {len(df)} candles for {pair} {timeframe}")
+            self.logger.info(f"Data range: {df.index[0]} to {df.index[-1]}")
+            self.logger.info(f"Latest close price: {df['close'].iloc[-1]}")
+            
+            return df
+        else:
+            self.logger.warning(f"No candle data found in response for {pair} {timeframe}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        self.logger.error(f"Failed to get candles for {pair} {timeframe}: {e}")
+        import traceback
+        self.logger.error(f"Full traceback: {traceback.format_exc()}")
+        return pd.DataFrame()
+```
+
+## 🚀 **How to Apply the Fix**
+
+1. **Open the file**: `gpt_vision_trader/api/freqtrade_client.py`
+2. **Find the method**: Look for `def get_pair_candles(` around line 98
+3. **Replace the entire method**: Replace everything from `def get_pair_candles(` to the end of that method (before the next `def`)
+4. **Save the file**
+5. **Test again**: Run your script
+
+## 🧪 **Alternative: Quick Test Script**
+
+If you want to test the fix first, create this test script:
+
+```python
+# test_fix.py
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from gpt_vision_trader.api.freqtrade_client import FreqtradeAPIClient, FreqtradeConfig
+
+def test_fixed_candles():
+    print("🔍 Testing Fixed Candle Data Retrieval")
+    
+    config = FreqtradeConfig()
+    client = FreqtradeAPIClient(config)
+    
+    if not client.ping():
+        print("❌ Cannot connect to Freqtrade")
+        return
+    
+    print("✅ Connected to Freqtrade")
+    
+    # Test getting candles
+    df = client.get_pair_candles("BTC/USDT", "15m", limit=10)
+    
+    if not df.empty:
+        print(f"✅ SUCCESS! Got {len(df)} candles")
+        print(f"📊 Columns: {list(df.columns)}")
+        print(f"📅 Date range: {df.index[0]} to {df.index[-1]}")
+        print(f"💰 Latest price: {df['close'].iloc[-1]}")
+        print(f"📈 Sample data:")
+        print(df.head(3))
+    else:
+        print("❌ Still no data")
+
+if __name__ == "__main__":
+    test_fixed_candles()
+```
+
+## 🎯 **What the Fix Does**
+
+The fix handles the **list-of-lists format** that your Freqtrade is returning:
+- **Detects the format**: Checks if data is `[timestamp, open, high, low, close, volume, ...]`
+- **Converts to DataFrame**: Properly maps the list values to column names
+- **Better error handling**: More detailed logging to debug issues
+- **Flexible parsing**: Works with both dictionary and list formats
+
+After applying this fix, your GPT Vision Trader should be able to:
+1. ✅ **Connect to Freqtrade API**
+2. ✅ **Retrieve candle data successfully**  
+3. ✅ **Generate charts with the data**
+4. ✅ **Run GPT analysis**
+5. ✅ **Execute trades**
+
+Try the fix and let me know if it works! 🚀

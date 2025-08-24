@@ -18,7 +18,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from gpt_vision_trader.config.settings import TradingConfig
-from gpt_vision_trader.api.freqtrade_client import FreqtradeAPIClient, FreqtradeConfig
+from gpt_vision_trader.api.enhanced_freqtrade_client import EnhancedFreqtradeClient, FreqtradeConfig
 from gpt_vision_trader.api.trading_controller import TradingController, TradingSession
 from gpt_vision_trader.core.gpt_analyzer import LiveGPTAnalyzer
 from gpt_vision_trader.utils.logging_utils import setup_logging
@@ -69,7 +69,7 @@ async def test_connections(config: TradingConfig) -> bool:
         password=config.freqtrade_password
     )
     
-    api_client = FreqtradeAPIClient(freqtrade_config)
+    api_client = EnhancedFreqtradeClient(freqtrade_config)
     
     if not api_client.ping():
         logger.error("❌ Freqtrade API connection failed")
@@ -106,7 +106,7 @@ async def run_test_mode(config: TradingConfig) -> bool:
             password=config.freqtrade_password
         )
         
-        api_client = FreqtradeAPIClient(freqtrade_config)
+        api_client = EnhancedFreqtradeClient(freqtrade_config)
         gpt_analyzer = LiveGPTAnalyzer(config.openai_api_key, config.gpt_model)
         
         controller = TradingController(
@@ -154,7 +154,7 @@ async def run_live_trading(config: TradingConfig, max_cycles: int = None) -> Non
             password=config.freqtrade_password
         )
         
-        api_client = FreqtradeAPIClient(freqtrade_config)
+        api_client = EnhancedFreqtradeClient(freqtrade_config)
         gpt_analyzer = LiveGPTAnalyzer(config.openai_api_key, config.gpt_model)
         
         controller = TradingController(

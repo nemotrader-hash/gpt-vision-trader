@@ -18,7 +18,8 @@ from ..core.gpt_analyzer import LiveGPTAnalyzer
 from ..core.chart_generator import ChartGenerator
 from ..core.data_processor import DataProcessor
 from ..utils.logging_utils import TradingLogHandler
-from .freqtrade_client import FreqtradeAPIClient, TradingOperations
+from .enhanced_freqtrade_client import EnhancedFreqtradeClient, EnhancedTradingOperations
+from ..utils.indicators import SMAIndicator
 
 
 class TradingController:
@@ -33,12 +34,13 @@ class TradingController:
     """
     
     def __init__(self,
-                 api_client: FreqtradeAPIClient,
+                 api_client: EnhancedFreqtradeClient,
                  gpt_analyzer: LiveGPTAnalyzer,
                  pair: str,
                  timeframe: str,
                  visible_days: int = 6,
-                 hidden_days: int = 1):
+                 hidden_days: int = 1,
+                 technical_indicators: Optional[Dict[str, SMAIndicator]] = None):
         """
         Initialize trading controller.
         
@@ -55,10 +57,30 @@ class TradingController:
         self.pair = pair
         self.timeframe = timeframe
         
+        # Set up default technical indicators if none provided
+        if technical_indicators is None:
+            technical_indicators = {
+                "SMA20": SMAIndicator(
+                    period=20,
+                    color='#ff7f0e',  
+                    alpha=0.8,
+                    linewidth=2.0
+                ),
+                "SMA50": SMAIndicator(
+                    period=50,
+                    color='#8757ff',  
+                    alpha=0.8,
+                    linewidth=2.0
+                ),
+            }
+        
         # Initialize components
         self.data_processor = DataProcessor(visible_days, hidden_days)
-        self.chart_generator = ChartGenerator("gpt_vision_trader/data/temp_charts")
-        self.trading_ops = TradingOperations(api_client)
+        self.chart_generator = ChartGenerator(
+            "gpt_vision_trader/data/temp_charts",
+            technical_indicators=technical_indicators
+        )
+        self.trading_ops = EnhancedTradingOperations(api_client)
         self.trading_logger = TradingLogHandler()
         
         # State tracking
@@ -165,8 +187,10 @@ class TradingController:
                 analysis_result['prediction']
             )
             
-            # Execute signals
-            execution_results = self.trading_ops.execute_trading_signals(signals, self.pair)
+            # Execute signals with GPT reasoning included
+            execution_results = self.trading_ops.execute_trading_signals_with_reasoning(
+                signals, self.pair, analysis_result
+            )
             
             # Log execution results
             for action, success in execution_results.items():

@@ -93,7 +93,41 @@ class FreqtradeAPIClient:
         Returns:
             Bot status information including open trades
         """
-        return self._make_request('GET', '/status')
+        try:
+            response = self._make_request('GET', '/status')
+            self.logger.debug(f"Status response: {response}")
+            
+            # Handle different response formats
+            if isinstance(response, dict):
+                return response
+            elif isinstance(response, list):
+                # If status returns a list (likely empty), create a default status
+                self.logger.info("Status returned list instead of dict - creating default status")
+                return {
+                    'state': 'running',
+                    'dry_run': True,
+                    'max_open_trades': 3,
+                    'stake_currency': 'USDT',
+                    'open_trades': response  # Use the list as open_trades
+                }
+            else:
+                self.logger.warning(f"Unexpected status response type: {type(response)}")
+                return {
+                    'state': 'unknown',
+                    'dry_run': True,
+                    'max_open_trades': 0,
+                    'stake_currency': 'USDT',
+                    'open_trades': []
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to get status: {e}")
+            return {
+                'state': 'error',
+                'dry_run': True,
+                'max_open_trades': 0,
+                'stake_currency': 'USDT',
+                'open_trades': []
+            }
     
     def get_pair_candles(self, 
                         pair: str, 
@@ -207,7 +241,7 @@ class FreqtradeAPIClient:
             List of open trade dictionaries
         """
         try:
-            status = self._make_request('GET', '/status')
+            status = self.get_status()  # Use our improved get_status method
             return status.get('open_trades', [])
         except Exception as e:
             self.logger.error(f"Failed to get open trades: {e}")
@@ -279,11 +313,24 @@ class FreqtradeAPIClient:
             Dictionary with trading summary information
         """
         try:
+            # Get status (now handles list responses properly)
             status = self.get_status()
-            profit = self.get_profit_info()
-            open_trades = self.get_open_trades()
             
-            return {
+            # Get profit info safely
+            try:
+                profit = self.get_profit_info()
+            except:
+                self.logger.warning("Could not get profit info, using defaults")
+                profit = {}
+            
+            # Get open trades safely
+            try:
+                open_trades = self.get_open_trades()
+            except:
+                self.logger.warning("Could not get open trades, using defaults")
+                open_trades = []
+            
+            summary = {
                 'bot_state': status.get('state', 'unknown'),
                 'dry_run': status.get('dry_run', True),
                 'open_trades_count': len(open_trades),
@@ -295,9 +342,25 @@ class FreqtradeAPIClient:
                 'win_rate': profit.get('winrate', 0),
                 'open_trades': open_trades
             }
+            
+            self.logger.info(f"Trading summary: {summary['bot_state']}, {summary['open_trades_count']} open trades")
+            return summary
+            
         except Exception as e:
             self.logger.error(f"Failed to get trading summary: {e}")
-            return {'error': str(e)}
+            return {
+                'bot_state': 'error',
+                'dry_run': True,
+                'open_trades_count': 0,
+                'max_open_trades': 0,
+                'stake_currency': 'USDT',
+                'total_profit': 0,
+                'profit_ratio': 0,
+                'trade_count': 0,
+                'win_rate': 0,
+                'open_trades': [],
+                'error': str(e)
+            }
 
 
 class TradingOperations:

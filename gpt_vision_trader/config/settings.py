@@ -48,9 +48,18 @@ class TradingConfig:
     
     def __post_init__(self):
         """Initialize configuration after creation."""
+        import logging
+        
         # Get OpenAI API key from environment if not provided
         if self.openai_api_key is None:
             self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        # Debug: Log API key status (without exposing the key)
+        if self.openai_api_key:
+            logging.info(f"✅ OpenAI API key loaded: {self.openai_api_key[:8]}...{self.openai_api_key[-4:]}")
+        else:
+            logging.warning("❌ OpenAI API key not found in environment or config")
+            logging.warning("   Please set: export OPENAI_API_KEY='your_key_here'")
         
         # Create directories
         os.makedirs(self.data_dir, exist_ok=True)

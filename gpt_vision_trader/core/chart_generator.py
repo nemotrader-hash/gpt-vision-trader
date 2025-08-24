@@ -119,8 +119,11 @@ class ChartGenerator:
         Returns:
             Path to generated chart image
         """
-        # Combine visible and hidden data
-        combined_data = pd.concat([visible_data, hidden_placeholder])
+        # Combine visible and hidden data - Fix pandas FutureWarning
+        if hidden_placeholder.empty:
+            combined_data = visible_data.copy()
+        else:
+            combined_data = pd.concat([visible_data, hidden_placeholder], ignore_index=False)
         
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
