@@ -158,7 +158,10 @@ class MultiPairTradingSystem:
                 api_client=self.api_client,
                 gpt_analyzer=gpt_analyzer,
                 pair=symbol,
-                timeframe=pair_config.timeframe
+                timeframe=pair_config.timeframe,
+                visible_days=config.visible_days,
+                hidden_days=config.hidden_days,
+                indicator_buffer_days=config.indicator_buffer_days
             )
             
             self.controllers[symbol] = controller

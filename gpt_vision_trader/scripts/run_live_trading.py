@@ -115,7 +115,8 @@ async def run_test_mode(config: TradingConfig) -> bool:
             pair=config.symbol,
             timeframe=config.timeframe,
             visible_days=config.visible_days,
-            hidden_days=config.hidden_days
+            hidden_days=config.hidden_days,
+            indicator_buffer_days=config.indicator_buffer_days
         )
         
         # Run single analysis cycle
@@ -163,7 +164,8 @@ async def run_live_trading(config: TradingConfig, max_cycles: int = None) -> Non
             pair=config.symbol,
             timeframe=config.timeframe,
             visible_days=config.visible_days,
-            hidden_days=config.hidden_days
+            hidden_days=config.hidden_days,
+            indicator_buffer_days=config.indicator_buffer_days
         )
         
         # Create and run trading session

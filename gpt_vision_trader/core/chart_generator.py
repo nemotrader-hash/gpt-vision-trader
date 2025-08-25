@@ -66,15 +66,17 @@ class ChartGenerator:
                       ohlcv_data: pd.DataFrame,
                       title: str,
                       hide_after: Optional[pd.Timestamp] = None,
-                      filename: Optional[str] = None) -> str:
+                      filename: Optional[str] = None,
+                      full_data_for_indicators: Optional[pd.DataFrame] = None) -> str:
         """
         Generate a candlestick chart with technical indicators.
         
         Args:
-            ohlcv_data: OHLCV DataFrame with technical indicators
+            ohlcv_data: OHLCV DataFrame for charting (visible portion)
             title: Chart title
             hide_after: Timestamp after which to hide data (for backtesting format)
             filename: Custom filename (auto-generated if None)
+            full_data_for_indicators: Full dataset including buffer for indicator calculation
             
         Returns:
             Path to generated chart image
@@ -87,7 +89,7 @@ class ChartGenerator:
         chart_path = self.output_dir / filename
         
         # Prepare data with indicators
-        plot_data = self._prepare_plot_data(ohlcv_data)
+        plot_data = self._prepare_plot_data(ohlcv_data, full_data_for_indicators)
         
         # Create the chart
         self._create_chart(
@@ -105,7 +107,8 @@ class ChartGenerator:
                            hidden_placeholder: pd.DataFrame,
                            title: str,
                            pair: str,
-                           timeframe: str) -> str:
+                           timeframe: str,
+                           full_data_for_indicators: Optional[pd.DataFrame] = None) -> str:
         """
         Generate a live trading chart with hidden future space.
         
@@ -115,6 +118,7 @@ class ChartGenerator:
             title: Chart title
             pair: Trading pair
             timeframe: Timeframe
+            full_data_for_indicators: Full dataset including buffer for indicator calculation
             
         Returns:
             Path to generated chart image
@@ -123,7 +127,16 @@ class ChartGenerator:
         if hidden_placeholder.empty:
             combined_data = visible_data.copy()
         else:
-            combined_data = pd.concat([visible_data, hidden_placeholder], ignore_index=False)
+            # Fill NaN placeholders with last visible values to match backtest behavior
+            # This ensures mplfinance handles the data consistently
+            filled_placeholder = hidden_placeholder.copy()
+            if not visible_data.empty:
+                last_visible_values = visible_data.iloc[-1]
+                for col in filled_placeholder.columns:
+                    if col in last_visible_values:
+                        filled_placeholder[col] = last_visible_values[col]
+            
+            combined_data = pd.concat([visible_data, filled_placeholder], ignore_index=False)
         
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -137,26 +150,40 @@ class ChartGenerator:
             ohlcv_data=combined_data,
             title=title,
             hide_after=hide_after,
-            filename=filename
+            filename=filename,
+            full_data_for_indicators=full_data_for_indicators
         )
     
-    def _prepare_plot_data(self, ohlcv_df: pd.DataFrame) -> pd.DataFrame:
+    def _prepare_plot_data(self, ohlcv_df: pd.DataFrame, full_data_for_indicators: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """
         Prepare OHLCV data for plotting by calculating technical indicators.
         
         Args:
-            ohlcv_df: Original OHLCV DataFrame
+            ohlcv_df: OHLCV DataFrame for plotting (visible portion)
+            full_data_for_indicators: Full dataset including buffer for indicator calculation
             
         Returns:
-            DataFrame with technical indicators calculated
+            DataFrame with technical indicators calculated (same length as ohlcv_df)
         """
-        # Ensure proper column names (capitalize for indicators)
-        plot_data = ohlcv_df.copy()
-        plot_data.columns = [col.capitalize() for col in plot_data.columns]
+        # Use full data for indicator calculation if provided, otherwise use plot data
+        data_for_calculation = full_data_for_indicators if full_data_for_indicators is not None else ohlcv_df
         
-        # Calculate all technical indicators
+        # Ensure proper column names (capitalize for indicators)
+        calc_data = data_for_calculation.copy()
+        calc_data.columns = [col.capitalize() for col in calc_data.columns]
+        
+        # Calculate all technical indicators on full dataset
         for indicator in self.technical_indicators.values():
-            plot_data = indicator.calculate(plot_data)
+            calc_data = indicator.calculate(calc_data)
+        
+        # If we used full data for calculation, extract only the visible portion
+        if full_data_for_indicators is not None:
+            # Get the same time range as the visible data
+            start_time = ohlcv_df.index[0]
+            end_time = ohlcv_df.index[-1]
+            plot_data = calc_data.loc[start_time:end_time].copy()
+        else:
+            plot_data = calc_data
         
         return plot_data
     
@@ -274,19 +301,20 @@ class ChartGenerator:
                            df: pd.DataFrame, 
                            hide_after: pd.Timestamp, 
                            ax: plt.Axes) -> None:
-        """Add grey overlay after specified timestamp."""
+        """Add grey overlay after specified timestamp. Matches backtest implementation exactly."""
         xmin, xmax = ax.get_xlim()
         ymin, ymax = ax.get_ylim()
-        
-        # Find visible portion
+
+        # Find the closest timestamp that's less than or equal to hide_after
+        # This handles cases where hide_after doesn't exactly match a candle timestamp
         visible_mask = df.index <= hide_after
         if not visible_mask.any():
+            # If no visible data, don't add overlay
             return
-        
+            
         visible_df = df[visible_mask]
         hide_ratio = len(visible_df) / len(df)
-        
-        # Add grey rectangle for hidden portion
+
         start_x = xmin + (xmax - xmin) * hide_ratio
         rect = plt.Rectangle(
             (start_x, ymin),

@@ -40,6 +40,7 @@ class TradingController:
                  timeframe: str,
                  visible_days: int = 6,
                  hidden_days: int = 1,
+                 indicator_buffer_days: int = 2,
                  technical_indicators: Optional[Dict[str, SMAIndicator]] = None):
         """
         Initialize trading controller.
@@ -51,6 +52,7 @@ class TradingController:
             timeframe: Timeframe (e.g., '15m')
             visible_days: Days of visible data for analysis
             hidden_days: Days of hidden/future data (prediction horizon)
+            indicator_buffer_days: Additional days for indicator pre-calculation
         """
         self.api_client = api_client
         self.gpt_analyzer = gpt_analyzer
@@ -75,7 +77,7 @@ class TradingController:
             }
         
         # Initialize components
-        self.data_processor = DataProcessor(visible_days, hidden_days)
+        self.data_processor = DataProcessor(visible_days, hidden_days, indicator_buffer_days)
         self.chart_generator = ChartGenerator(
             "gpt_vision_trader/data/temp_charts",
             technical_indicators=technical_indicators
@@ -88,9 +90,71 @@ class TradingController:
         self.last_analysis_time: Optional[datetime] = None
         self.last_prediction: Optional[str] = None
         
+        # Position and signal tracking
+        self.last_signal: Optional[str] = None  # Track last signal: 'long', 'short', or None
+        self.current_position: Optional[str] = None  # Track current position: 'long', 'short', or None
+        
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"TradingController initialized for {pair} {timeframe}")
     
+    def _update_position_state(self) -> None:
+        """Update current position state by checking open trades."""
+        try:
+            open_trades = self.api_client.get_open_trades()
+            current_trade = next((t for t in open_trades if t.get('pair') == self.pair), None)
+            
+            if current_trade:
+                # Determine position direction from trade data
+                # In freqtrade, all positions are technically 'long' but we track intent via tags
+                entry_tag = current_trade.get('enter_tag', '')
+                if 'short' in entry_tag.lower() or 'bear' in entry_tag.lower():
+                    self.current_position = 'short'
+                else:
+                    self.current_position = 'long'
+            else:
+                self.current_position = None
+                
+            self.logger.debug(f"Position state updated: {self.current_position}")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating position state: {e}")
+    
+    def _extract_signal_from_analysis(self, analysis_result: Dict) -> Optional[str]:
+        """Extract the primary signal direction from analysis results."""
+        if analysis_result.get('enter_long', False):
+            return 'long'
+        elif analysis_result.get('enter_short', False):
+            return 'short'
+        elif analysis_result.get('exit_long', False) or analysis_result.get('exit_short', False):
+            return 'exit'
+        return None
+    
+    def _should_skip_signal(self, new_signal: str) -> bool:
+        """
+        Determine if we should skip this signal to avoid unnecessary trade cycling.
+        
+        Args:
+            new_signal: The new signal direction ('long', 'short', 'exit')
+            
+        Returns:
+            True if signal should be skipped, False otherwise
+        """
+        # Update position state first
+        self._update_position_state()
+        
+        # Skip if same direction signal and we already have a position in that direction
+        if new_signal in ['long', 'short']:
+            if self.current_position == new_signal and self.last_signal == new_signal:
+                self.logger.info(f"Skipping {new_signal} signal - already in {self.current_position} position with same signal")
+                return True
+        
+        # Always allow exit signals
+        if new_signal == 'exit':
+            return False
+            
+        # Allow signal if position direction changed or no current position
+        return False
+
     async def run_analysis_cycle(self) -> Optional[Dict]:
         """
         Run a complete analysis cycle.
@@ -102,11 +166,12 @@ class TradingController:
             self.cycle_count += 1
             self.logger.info(f"Starting analysis cycle #{self.cycle_count}")
             
-            # Step 1: Get live OHLCV data
+            # Step 1: Get live OHLCV data (including buffer for indicators)
+            required_candles = self.data_processor.calculate_required_candles(self.timeframe)
             ohlcv_data = self.api_client.get_pair_candles(
                 self.pair, 
                 self.timeframe, 
-                limit=500
+                limit=max(required_candles, 500)  # Ensure we get enough data
             )
             
             if ohlcv_data.empty:
@@ -118,13 +183,14 @@ class TradingController:
                 ohlcv_data, self.timeframe
             )
             
-            # Step 3: Generate chart
+            # Step 3: Generate chart (using full data for indicator calculation)
             chart_path = self.chart_generator.generate_live_chart(
                 visible_data,
                 hidden_placeholder,
                 f"{self.pair} {self.timeframe} - Live Analysis",
                 self.pair,
-                self.timeframe
+                self.timeframe,
+                full_data_for_indicators=ohlcv_data
             )
             
             # Step 4: Analyze with GPT
@@ -180,6 +246,31 @@ class TradingController:
                 'exit_short': analysis_result.get('exit_short', False)
             }
             
+            # Extract primary signal direction
+            new_signal = self._extract_signal_from_analysis(signals)
+            
+            # Check if we should skip this signal to avoid unnecessary cycling
+            if new_signal and self._should_skip_signal(new_signal):
+                self.logger.info(f"Skipping signal execution - {new_signal} signal with existing {self.current_position} position")
+                
+                # Return result indicating signal was skipped
+                result = {
+                    'timestamp': datetime.now().isoformat(),
+                    'signals': signals,
+                    'execution_results': {
+                        'enter_long_success': False,
+                        'exit_long_success': False,
+                        'enter_short_success': False,
+                        'exit_short_success': False,
+                        'signal_skipped': True,
+                        'skip_reason': f"Same {new_signal} signal with existing {self.current_position} position"
+                    },
+                    'any_action_taken': False,
+                    'signal_skipped': True
+                }
+                
+                return result
+            
             # Log signals
             self.trading_logger.log_trade_signal(
                 signals,
@@ -191,6 +282,10 @@ class TradingController:
             execution_results = self.trading_ops.execute_trading_signals_with_reasoning(
                 signals, self.pair, analysis_result
             )
+            
+            # Update last signal after successful execution
+            if new_signal:
+                self.last_signal = new_signal
             
             # Log execution results
             for action, success in execution_results.items():
@@ -261,13 +356,18 @@ class TradingController:
         Returns:
             Status dictionary
         """
+        # Update position state
+        self._update_position_state()
+        
         return {
             'controller_info': {
                 'pair': self.pair,
                 'timeframe': self.timeframe,
                 'cycle_count': self.cycle_count,
                 'last_analysis_time': self.last_analysis_time.isoformat() if self.last_analysis_time else None,
-                'last_prediction': self.last_prediction
+                'last_prediction': self.last_prediction,
+                'last_signal': self.last_signal,
+                'current_position': self.current_position
             },
             'api_status': self.api_client.get_trading_summary(),
             'gpt_stats': self.gpt_analyzer.get_stats()

@@ -131,7 +131,8 @@ class SimpleTradingBot:
             pair=self.config.symbol,
             timeframe=self.config.timeframe,
             visible_days=self.config.visible_days,
-            hidden_days=self.config.hidden_days
+            hidden_days=self.config.hidden_days,
+            indicator_buffer_days=self.config.indicator_buffer_days
         )
         
         logging.info("✅ All components initialized")

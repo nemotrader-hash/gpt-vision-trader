@@ -20,31 +20,48 @@ class DataProcessor:
     Handles window extraction, technical indicator preparation, and data formatting.
     """
     
-    def __init__(self, visible_days: int = 6, hidden_days: int = 1):
+    def __init__(self, visible_days: int = 6, hidden_days: int = 1, indicator_buffer_days: int = 2):
         """
         Initialize data processor.
         
         Args:
             visible_days: Number of visible days in analysis window
             hidden_days: Number of hidden days (prediction horizon)
+            indicator_buffer_days: Additional days for indicator pre-calculation
         """
         self.visible_days = visible_days
         self.hidden_days = hidden_days
+        self.indicator_buffer_days = indicator_buffer_days
         
-        logging.info(f"DataProcessor initialized: {visible_days} visible, {hidden_days} hidden days")
+        logging.info(f"DataProcessor initialized: {visible_days} visible, {hidden_days} hidden, {indicator_buffer_days} buffer days")
+    
+    def calculate_required_candles(self, timeframe: str) -> int:
+        """
+        Calculate total number of candles needed including buffer for indicators.
+        
+        Args:
+            timeframe: Timeframe string (e.g., '15m', '1h')
+            
+        Returns:
+            Total number of candles to fetch
+        """
+        total_days = self.visible_days + self.indicator_buffer_days
+        return self._calculate_candle_count(total_days, timeframe)
     
     def extract_analysis_window(self, 
                                ohlcv_data: pd.DataFrame,
                                timeframe: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Extract visible and hidden data windows for analysis.
+        Uses full dataset (including buffer) for indicator calculation,
+        but returns only visible portion for charting.
         
         Args:
-            ohlcv_data: Full OHLCV dataset
+            ohlcv_data: Full OHLCV dataset (including buffer days)
             timeframe: Timeframe string (e.g., '15m', '1h')
             
         Returns:
-            Tuple of (visible_data, hidden_placeholder)
+            Tuple of (visible_data_with_indicators, hidden_placeholder)
         """
         if ohlcv_data.empty:
             raise ValueError("OHLCV data is empty")
@@ -53,8 +70,12 @@ class DataProcessor:
         visible_candles = self._calculate_candle_count(self.visible_days, timeframe)
         hidden_candles = self._calculate_candle_count(self.hidden_days, timeframe)
         
-        # Extract visible data (most recent candles)
-        visible_data = ohlcv_data.tail(visible_candles).copy()
+        # Use full dataset for indicator calculations (including buffer)
+        # This ensures indicators have enough historical data for accurate calculation
+        full_data_for_indicators = ohlcv_data.copy()
+        
+        # Extract only the visible portion for charting (most recent visible_candles)
+        visible_data = full_data_for_indicators.tail(visible_candles).copy()
         
         # Create hidden placeholder with future timestamps
         if hidden_candles > 0:
@@ -71,7 +92,7 @@ class DataProcessor:
         else:
             hidden_placeholder = pd.DataFrame()
         
-        logging.info(f"Extracted analysis window: {len(visible_data)} visible + {len(hidden_placeholder)} hidden")
+        logging.info(f"Extracted analysis window: {len(visible_data)} visible + {len(hidden_placeholder)} hidden (from {len(ohlcv_data)} total candles)")
         return visible_data, hidden_placeholder
     
     def prepare_metadata(self,

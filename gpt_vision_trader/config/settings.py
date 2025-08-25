@@ -27,6 +27,7 @@ class TradingConfig:
     # Analysis window settings - CRITICAL: Must match backtest settings
     visible_days: int = 6
     hidden_days: int = 1  # Prediction horizon
+    indicator_buffer_days: int = 2  # Additional days for indicator pre-calculation
     
     # GPT model configuration
     gpt_model: str = "gpt-4o"  # Default to newer, more cost-effective model
@@ -122,6 +123,7 @@ class TradingConfig:
             timeframe="15m", 
             visible_days=6,
             hidden_days=1,
+            indicator_buffer_days=2,
             gpt_model="gpt-4o",  # More cost-effective than gpt-4.1
             analysis_interval_minutes=15
         )
@@ -136,6 +138,7 @@ class TradingConfig:
             timeframe="15m",
             visible_days=3,  # Shorter for faster testing
             hidden_days=1,
+            indicator_buffer_days=1,  # Smaller buffer for dev
             gpt_model="gpt-4o-mini",  # Cheapest option
             analysis_interval_minutes=30  # Less frequent for development
         )
@@ -150,6 +153,7 @@ class TradingConfig:
             timeframe="15m",
             visible_days=6,  # Match backtesting exactly
             hidden_days=1,
+            indicator_buffer_days=2,
             gpt_model="gpt-4o",  # Good balance of performance and cost
             analysis_interval_minutes=15  # Standard frequency
         )
@@ -173,6 +177,9 @@ class TradingConfig:
         if self.hidden_days <= 0:
             raise ValueError("Hidden days must be positive")
         
+        if self.indicator_buffer_days < 0:
+            raise ValueError("Indicator buffer days must be non-negative")
+        
         if self.analysis_interval_minutes <= 0:
             raise ValueError("Analysis interval must be positive")
         
@@ -195,6 +202,7 @@ class TradingConfig:
             'timeframe': self.timeframe,
             'visible_days': self.visible_days,
             'hidden_days': self.hidden_days,
+            'indicator_buffer_days': self.indicator_buffer_days,
             'gpt_model': self.gpt_model,
             'analysis_interval_minutes': self.analysis_interval_minutes,
             'freqtrade_url': self.freqtrade_url,
