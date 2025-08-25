@@ -15,7 +15,6 @@ from ..utils.indicators import BaseIndicator, SMAIndicator, RSIIndicator, MACDIn
 from dotenv import load_dotenv
 load_dotenv()
 
-
 @dataclass
 class TradingConfig:
     """

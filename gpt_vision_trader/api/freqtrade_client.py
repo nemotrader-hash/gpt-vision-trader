@@ -250,13 +250,10 @@ class FreqtradeAPIClient:
         try:
             # Create comprehensive entry tag with reasoning
             base_tag = f"gpt_{prediction or side}" if prediction else f"gpt_{side}"
-            reasoning_tag = self._sanitize_entry_tag(gpt_reasoning, max_length=80)
             
             # Combine base tag with reasoning (keep within reasonable limits)
-            if reasoning_tag and reasoning_tag != "gpt_signal":
-                entry_tag = f"{base_tag}_{reasoning_tag}"
-            else:
-                entry_tag = base_tag
+
+            entry_tag = f"{base_tag}_{gpt_reasoning}"
             
             # Ensure tag isn't too long (some systems have limits: freqtrade limit to 255 char)
             if len(entry_tag) > 255:

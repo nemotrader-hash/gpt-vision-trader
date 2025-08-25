@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import mplfinance as mpf
+import numpy as np
 import pandas as pd
 
 from ..utils.indicators import BaseIndicator
@@ -96,7 +97,8 @@ class ChartGenerator:
             plot_data=plot_data,
             title=title,
             output_path=str(chart_path),
-            hide_after=hide_after
+            hide_after=hide_after,
+            chart_data_for_overlay=ohlcv_data  # Pass original chart data for overlay calculation
         )
         
         logging.info(f"Generated chart: {chart_path}")
@@ -127,16 +129,8 @@ class ChartGenerator:
         if hidden_placeholder.empty:
             combined_data = visible_data.copy()
         else:
-            # Fill NaN placeholders with last visible values to match backtest behavior
-            # This ensures mplfinance handles the data consistently
-            filled_placeholder = hidden_placeholder.copy()
-            if not visible_data.empty:
-                last_visible_values = visible_data.iloc[-1]
-                for col in filled_placeholder.columns:
-                    if col in last_visible_values:
-                        filled_placeholder[col] = last_visible_values[col]
-            
-            combined_data = pd.concat([visible_data, filled_placeholder], ignore_index=False)
+            # Handle empty/NaN columns to avoid FutureWarning
+            combined_data = pd.concat([visible_data, hidden_placeholder], ignore_index=False, sort=False)
         
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -176,12 +170,24 @@ class ChartGenerator:
         for indicator in self.technical_indicators.values():
             calc_data = indicator.calculate(calc_data)
         
-        # If we used full data for calculation, extract only the visible portion
+        # If we used full data for calculation, we need to preserve the structure of ohlcv_df
         if full_data_for_indicators is not None:
-            # Get the same time range as the visible data
-            start_time = ohlcv_df.index[0]
-            end_time = ohlcv_df.index[-1]
-            plot_data = calc_data.loc[start_time:end_time].copy()
+            # Start with the original ohlcv_df structure (preserves NaN values in hidden portion)
+            plot_data = ohlcv_df.copy()
+            
+            # Ensure proper column names (capitalize for consistency)
+            plot_data.columns = [col.capitalize() for col in plot_data.columns]
+            
+            # For each timestamp in plot_data, get the indicator values from calc_data
+            # This preserves NaN values in the original data while adding indicator columns
+            for col in calc_data.columns:
+                if col not in plot_data.columns:  # Only add new indicator columns
+                    plot_data[col] = np.nan  # Initialize with NaN
+                    
+                    # Fill indicator values only where we have calculated data
+                    for timestamp in plot_data.index:
+                        if timestamp in calc_data.index:
+                            plot_data.loc[timestamp, col] = calc_data.loc[timestamp, col]
         else:
             plot_data = calc_data
         
@@ -191,7 +197,8 @@ class ChartGenerator:
                      plot_data: pd.DataFrame,
                      title: str,
                      output_path: str,
-                     hide_after: Optional[pd.Timestamp] = None) -> None:
+                     hide_after: Optional[pd.Timestamp] = None,
+                     chart_data_for_overlay: Optional[pd.DataFrame] = None) -> None:
         """
         Create the actual chart using mplfinance.
         
@@ -200,6 +207,7 @@ class ChartGenerator:
             title: Chart title
             output_path: Path to save chart
             hide_after: Timestamp after which to hide data
+            chart_data_for_overlay: Original chart data (visible + hidden, no buffer) for overlay calculation
         """
         # Get indicators that need separate panels
         bottom_indicators = [
@@ -263,9 +271,9 @@ class ChartGenerator:
         
         # Add hidden overlay if specified
         if hide_after is not None:
-            self._add_hidden_overlay(plot_data, hide_after, main_ax)
+            self._add_hidden_overlay(plot_data, hide_after, main_ax, chart_data_for_overlay)
             for ax in bottom_axes:
-                self._add_hidden_overlay(plot_data, hide_after, ax)
+                self._add_hidden_overlay(plot_data, hide_after, ax, chart_data_for_overlay)
         
         # Format date axis
         if bottom_axes:
@@ -300,21 +308,33 @@ class ChartGenerator:
     def _add_hidden_overlay(self, 
                            df: pd.DataFrame, 
                            hide_after: pd.Timestamp, 
-                           ax: plt.Axes) -> None:
-        """Add grey overlay after specified timestamp. Matches backtest implementation exactly."""
+                           ax: plt.Axes,
+                           chart_data_only: Optional[pd.DataFrame] = None) -> None:
+        """
+        Add grey overlay after specified timestamp.
+        
+        Args:
+            df: Full plot data (may include buffer days)
+            hide_after: Timestamp after which to hide data
+            ax: Matplotlib axes
+            chart_data_only: Only the data being charted (visible + hidden, no buffer)
+        """
         xmin, xmax = ax.get_xlim()
         ymin, ymax = ax.get_ylim()
-
-        # Find the closest timestamp that's less than or equal to hide_after
-        # This handles cases where hide_after doesn't exactly match a candle timestamp
-        visible_mask = df.index <= hide_after
+        
+        # Use chart_data_only if provided (this excludes buffer days)
+        # Otherwise fall back to df for backward compatibility
+        calculation_df = chart_data_only if chart_data_only is not None else df
+        
+        # Find visible portion
+        visible_mask = calculation_df.index <= hide_after
         if not visible_mask.any():
-            # If no visible data, don't add overlay
             return
-            
-        visible_df = df[visible_mask]
-        hide_ratio = len(visible_df) / len(df)
-
+        
+        visible_df = calculation_df[visible_mask]
+        hide_ratio = len(visible_df) / len(calculation_df)
+        
+        # Add grey rectangle for hidden portion
         start_x = xmin + (xmax - xmin) * hide_ratio
         rect = plt.Rectangle(
             (start_x, ymin),
