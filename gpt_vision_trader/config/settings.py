@@ -12,6 +12,9 @@ from typing import Dict, Optional
 
 from ..utils.indicators import BaseIndicator, SMAIndicator, RSIIndicator, MACDIndicator, ATRIndicator
 
+from dotenv import load_dotenv
+load_dotenv()
+
 
 @dataclass
 class TradingConfig:
